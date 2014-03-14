@@ -44,7 +44,8 @@
             transformResult: function(response) {
                 return "string" == typeof response ? $.parseJSON(response) : response;
             },
-            selectOnSpace: !1
+            selectOnSpace: !1,
+            token: null
         };
         that.element = el, that.el = $(el), that.suggestions = [], that.badQueries = [], 
         that.selectedIndex = -1, that.currentValue = that.element.value, that.intervalId = 0, 
@@ -258,13 +259,17 @@
             response && $.isArray(response.suggestions)) that.suggestions = response.suggestions, 
             that.suggest(); else if (!that.isBadQuery(q)) {
                 if (options.onSearchStart.call(that.element, options.params) === !1) return;
-                that.currentRequest && that.currentRequest.abort(), that.currentRequest = $.ajax({
+                that.currentRequest && that.currentRequest.abort();
+                var ajaxParams = {
                     url: serviceUrl,
                     data: JSON.stringify(params),
                     type: options.type,
                     dataType: options.dataType,
                     contentType: options.contentType
-                }).done(function(data) {
+                }, token = $.trim(that.options.token);
+                token && (ajaxParams.headers = {
+                    Authorization: "Token " + token
+                }), that.currentRequest = $.ajax(ajaxParams).done(function(data) {
                     var result;
                     that.currentRequest = null, result = options.transformResult(data), that.processResponse(result, q, cacheKey), 
                     options.onSearchComplete.call(that.element, q, result.suggestions);

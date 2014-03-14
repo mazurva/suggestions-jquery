@@ -74,7 +74,8 @@
                 transformResult: function (response) {
                     return typeof response === 'string' ? $.parseJSON(response) : response;
                 },
-                selectOnSpace: false
+                selectOnSpace: false,
+                token: null
             };
 
         // Shared variables:
@@ -506,13 +507,21 @@
                 if (that.currentRequest) {
                     that.currentRequest.abort();
                 }
-                that.currentRequest = $.ajax({
+                var ajaxParams = {
                     url: serviceUrl,
                     data: JSON.stringify(params),
                     type: options.type,
                     dataType: options.dataType,
                     contentType: options.contentType
-                }).done(function (data) {
+                };
+                var token = $.trim(that.options.token);
+                if (token) {
+                    ajaxParams.headers = {
+                        'Authorization': 'Token ' + token
+                    }
+                }
+                that.currentRequest = $.ajax(ajaxParams)
+                .done(function (data) {
                     var result;
                     that.currentRequest = null;
                     result = options.transformResult(data);
