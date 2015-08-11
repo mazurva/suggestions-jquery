@@ -1,5 +1,5 @@
 /**
- * DaData.ru Suggestions jQuery plugin, version 15.6.1
+ * DaData.ru Suggestions jQuery plugin, version 15.7.4
  *
  * DaData.ru Suggestions jQuery plugin is freely distributable under the terms of MIT-style license
  * Built on DevBridge Autocomplete for jQuery (https://github.com/devbridge/jQuery-Autocomplete)
@@ -241,21 +241,78 @@
      */
     var matchers = function() {
 
-        function haveSameParent (suggestions) {
-            if (suggestions.length === 0) {
-                return false;
-            }
-            if (suggestions.length === 1) {
-                return true;
-            }
+        /**
+         * Factory to create same parent checker function
+         * @param preprocessFn called on each value before comparison
+         * @returns {Function} same parent checker function
+         */
+        function sameParentChecker (preprocessFn) {
+           return function (suggestions) {
+               if (suggestions.length === 0) {
+                   return false;
+               }
+               if (suggestions.length === 1) {
+                   return true;
+               }
 
-            var parentValue = suggestions[0].value,
-                aliens = $.grep(suggestions, function (suggestion) {
-                    return suggestion.value.indexOf(parentValue) === 0;
-                }, true);
+               var parentValue = preprocessFn(suggestions[0].value),
+                   aliens = $.grep(suggestions, function (suggestion) {
+                       return preprocessFn(suggestion.value).indexOf(parentValue) === 0;
+                   }, true);
 
-            return aliens.length === 0;
+               return aliens.length === 0;
+           }
         }
+
+        /**
+         * Factory to create match by words function
+         * @param haveSameParentFn called to check if all suggestions have the same parent
+         * @returns {Function} match by words function
+         */
+        function byWordsMatcher(haveSameParentFn) {
+            return function (query, suggestions) {
+                var stopwords = this && this.stopwords,
+                    queryLowerCase = query.toLowerCase(),
+                    queryTokens,
+                    index = -1;
+
+                if (haveSameParentFn(suggestions)) {
+                    queryTokens = utils.withSubTokens(utils.getWords(queryLowerCase, stopwords));
+
+                    $.each(suggestions, function(i, suggestion) {
+                        var suggestedValue = suggestion.value.toLowerCase();
+
+                        if (utils.stringEncloses(queryLowerCase, suggestedValue)) {
+                            return false;
+                        }
+
+                        // check if query words are a subset of suggested words
+                        var suggestionWords = utils.withSubTokens(utils.getWords(suggestedValue, stopwords));
+
+                        if (utils.arrayMinus(queryTokens, suggestionWords).length === 0) {
+                            index = i;
+                            return false;
+                        }
+                    });
+                }
+
+                return index;
+            }
+        }
+
+        /**
+         * Default same parent checker. Compares raw values.
+         * @type {Function}
+         */
+        var haveSameParent = sameParentChecker(function(val) { return val; });
+
+        /**
+         * Same parent checker for addresses. Strips house and extension before comparison.
+         * @type {Function}
+         */
+        var haveSameParentAddress = sameParentChecker(function(val) {
+            return val.replace(/, (?:д|вл|двлд|к) .+$/, '');
+        });
 
         return {
 
@@ -292,34 +349,8 @@
              * Matches query against suggestions word-by-word (with respect to stopwords).
              * Matches if query words are a subset of suggested words.
              */
-            matchByWords: function (query, suggestions) {
-                var stopwords = this && this.stopwords,
-                    queryLowerCase = query.toLowerCase(),
-                    queryTokens,
-                    index = -1;
-
-                if (haveSameParent(suggestions)) {
-                    queryTokens = utils.withSubTokens(utils.getWords(queryLowerCase, stopwords));
-
-                    $.each(suggestions, function(i, suggestion) {
-                        var suggestedValue = suggestion.value.toLowerCase();
-
-                        if (utils.stringEncloses(queryLowerCase, suggestedValue)) {
-                            return false;
-                        }
-
-                        // check if query words are a subset of suggested words
-                        var suggestionWords = utils.withSubTokens(utils.getWords(suggestedValue, stopwords));
-
-                        if (utils.arrayMinus(queryTokens, suggestionWords).length === 0) {
-                            index = i;
-                            return false;
-                        }
-                    });
-                }
-
-                return index;
-            },
+            matchByWords: byWordsMatcher(haveSameParent),
+            matchByWordsAddress: byWordsMatcher(haveSameParentAddress),
 
             matchByFields: function (query, suggestions) {
                 var stopwords = this && this.stopwords,
@@ -350,6 +381,7 @@
         };
 
     }();
+
 
     (function () {
 
@@ -450,7 +482,7 @@
             urlSuffix: 'address',
             matchers: [
                 $.proxy(matchers.matchByNormalizedQuery, { stopwords: ADDRESS_STOPWORDS }),
-                $.proxy(matchers.matchByWords, { stopwords: ADDRESS_STOPWORDS })
+                $.proxy(matchers.matchByWordsAddress, { stopwords: ADDRESS_STOPWORDS })
             ],
             boundsAvailable: ['region', 'area', 'city', 'settlement', 'street', 'house'],
             boundsFields: {
@@ -617,6 +649,7 @@
 
     }());
 
+
     var serviceMethods = {
         'suggest': {
             defaultParams: {
@@ -632,6 +665,13 @@
                 dataType: 'json'
             },
             addTypeInUrl: false
+        },
+        'status': {
+            defaultParams: {
+                type: 'GET',
+                dataType: 'json'
+            },
+            addTypeInUrl: true
         }
     };
 
@@ -669,10 +709,12 @@
             removeConstraint: 'suggestions-remove',
             value: 'suggestions-value'
         };
+        that.disabled = false;
         that.selection = null;
         that.$viewport = $(window);
         that.$body = $(document.body);
         that.type = null;
+        that.status = {};
 
         // Initialize and set options:
         that.initialize();
@@ -683,7 +725,7 @@
 
     Suggestions.defaultOptions = defaultOptions;
 
-    Suggestions.version = '15.6.1';
+    Suggestions.version = '15.7.4';
 
     $.Suggestions = Suggestions;
 
@@ -915,6 +957,10 @@
             this.disabled = false;
         },
 
+        isUnavailable: function () {
+            return this.disabled;
+        },
+
         update: function () {
             var that = this,
                 query = that.el.val();
@@ -929,9 +975,21 @@
 
         setSuggestion: function (suggestion) {
             var that = this,
+                data,
                 value;
 
-            if ($.isPlainObject(suggestion)) {
+            if ($.isPlainObject(suggestion) && $.isPlainObject(suggestion.data)) {
+                suggestion = $.extend(true, {}, suggestion);
+
+                if (that.bounds.own.length) {
+                    that.checkValueBounds(suggestion);
+                    data = that.copyBoundedData(suggestion.data, that.bounds.all);
+                    if (suggestion.data.kladr_id) {
+                        data.kladr_id = that.getBoundedKladrId(suggestion.data.kladr_id, that.bounds.all);
+                    }
+                    suggestion.data = data;
+                }
+
                 value = that.getSuggestionValue(suggestion) || '';
                 that.currentValue = value;
                 that.el.val(value);
@@ -1302,7 +1360,7 @@
                 }
 
                 if (that.options.triggerSelectOnBlur) {
-                    if (!that.disabled) {
+                    if (!that.isUnavailable()) {
                         that.selectCurrentValue({ noSpace: true })
                             .always(function () {
                                 // For NAMEs selecting keeps suggestions list visible, so hide it
@@ -1331,7 +1389,7 @@
             onElementKeyDown: function (e) {
                 var that = this;
 
-                if (that.disabled) {
+                if (that.isUnavailable()) {
                     return;
                 }
 
@@ -1400,7 +1458,7 @@
             onElementKeyUp: function (e) {
                 var that = this;
 
-                if (that.disabled) {
+                if (that.isUnavailable()) {
                     return;
                 }
 
@@ -1458,7 +1516,7 @@
             completeOnFocus: function () {
                 var that = this;
 
-                if (that.disabled) {
+                if (that.isUnavailable()) {
                     return;
                 }
 
@@ -1517,44 +1575,46 @@
          * Methods related to plugin's authorization on server
          */
 
-        // Two-dimensional hash [type][token]
-        var tokenRequests = {};
+        // keys are "[type][token]"
+        var statusRequests = {};
 
         function resetTokens () {
-            $.each(types, function(typeName){
-                tokenRequests[typeName] = {};
+            $.each(statusRequests, function(){
+                this.abort();
             });
+            statusRequests = {};
         }
+
         resetTokens();
 
         var methods = {
 
-            checkToken: function () {
+            checkStatus: function () {
                 var that = this,
                     token = $.trim(that.options.token),
-                    requestsOfType = tokenRequests[that.options.type],
-                    tokenRequest = requestsOfType[token];
+                    requestKey = that.options.type + token,
+                    request = statusRequests[requestKey];
 
-                function onTokenReady() {
-                    that.checkToken();
+                if (!request) {
+                    request = statusRequests[requestKey] = $.ajax(that.getAjaxParams('status'));
                 }
 
-                if (token) {
-                    if (tokenRequest && $.isFunction(tokenRequest.promise)) {
-                        switch (tokenRequest.state()) {
-                            case 'resolved':
-                                break;
-                            case 'rejected':
-                                if ($.isFunction(that.options.onSearchError)) {
-                                    that.options.onSearchError.call(that.element, null, tokenRequest, 'error', tokenRequest.statusText);
-                                }
-                                break;
-                            default:
-                                tokenRequest.always(onTokenReady);
+                request
+                    .done(function(status){
+                        if (status.search) {
+                            $.extend(that.status, status);
+                        } else {
+                            triggerError('Service Unavailable');
                         }
-                    } else {
-                        (requestsOfType[token] = $.ajax(that.getAjaxParams('suggest')))
-                            .always(onTokenReady);
+                    })
+                    .fail(function(){
+                        triggerError(request.statusText);
+                    });
+
+                function triggerError(errorThrown){
+                    // If unauthorized
+                    if ($.isFunction(that.options.onSearchError)) {
+                        that.options.onSearchError.call(that.element, null, request, 'error', errorThrown);
                     }
                 }
             }
@@ -1566,7 +1626,7 @@
         $.extend(Suggestions.prototype, methods);
 
         notificator
-            .on('setOptions', methods.checkToken);
+            .on('setOptions', methods.checkStatus);
 
     }());
 
@@ -1668,7 +1728,7 @@
                     token = $.trim(that.options.token),
                     resolver = $.Deferred();
 
-                if (!that.options.useDadata || !that.type.enrichmentEnabled || !token || selectionOptions && selectionOptions.dontEnrich) {
+                if (!that.status.enrich || !that.type.enrichmentEnabled || !token || selectionOptions && selectionOptions.dontEnrich) {
                     return resolver.resolve(suggestion);
                 }
 
@@ -1718,10 +1778,6 @@
             }
 
         };
-
-        $.extend(defaultOptions, {
-            useDadata: true
-        });
 
         $.extend(Suggestions.prototype, methods);
 
@@ -1995,12 +2051,12 @@
                     maxLength = options && options.maxLength,
                     tokens, tokenMatchers,
                     rWords = utils.reWordExtractor(),
-                    match, i, chunk, formattedStr;
+                    match, word, i, chunk, formattedStr;
 
                 if (!value) return '';
 
                 tokens = utils.formatToken(currentValue).split(wordSplitter);
-                tokens = utils.arrayMinus(utils.withSubTokens(tokens), unformattableTokens);
+                tokens = utils.withSubTokens(tokens);
 
                 tokenMatchers = $.map(tokens, function (token) {
                     return new RegExp('^((.*)([' + wordPartsDelimiters + ']+))?' +
@@ -2010,9 +2066,11 @@
 
                 // parse string by words
                 while ((match = rWords.exec(value)) && match[0]) {
+                    word = match[1];
                     chunks.push({
-                        text: match[1],
-                        formatted: utils.formatToken(match[1]),
+                        text: word,
+                        inUpperCase: word.toLowerCase() !== word,
+                        formatted: utils.formatToken(word),
                         matchable: true
                     });
                     if (match[2]) {
@@ -2025,7 +2083,7 @@
                 // use simple loop because length can change
                 for (i = 0; i < chunks.length; i++) {
                     chunk = chunks[i];
-                    if (chunk.matchable && !chunk.matched && $.inArray(chunk.formatted, unformattableTokens) === -1) {
+                    if (chunk.matchable && !chunk.matched && ($.inArray(chunk.formatted, unformattableTokens) === -1 || chunk.inUpperCase)) {
                         $.each(tokenMatchers, function (j, matcher) {
                             var tokenMatch = matcher.exec(chunk.formatted),
                                 length, nextIndex = i + 1;
@@ -2520,15 +2578,15 @@
          * @param instance other Suggestions instance
          */
         function belongsToArea(suggestion, instance){
-            var result = true,
-                parentSuggestion = instance.selection;
+            var parentSuggestion = instance.selection,
+                result = parentSuggestion && parentSuggestion.data && instance.bounds;
 
-            if (parentSuggestion && parentSuggestion.data && instance.bounds) {
+            if (result) {
                 $.each(instance.bounds.all, function (i, bound) {
                     return (result = parentSuggestion.data[bound] === suggestion.data[bound]);
                 });
-                return result;
             }
+            return result;
         }
 
         var methods = {
@@ -2750,29 +2808,14 @@
 
             shareWithParent: function (suggestion) {
                 // that is the parent control's instance
-                var that = this.getParentInstance(),
-                    parentData,
-                    parentValueData;
+                var that = this.getParentInstance();
 
                 if (!that || that.type !== this.type || belongsToArea(suggestion, that)) {
                     return;
                 }
 
                 that.shareWithParent(suggestion);
-
-                parentValueData = that.copyBoundedData(suggestion.data, that.bounds.own);
-                parentValueData = that.type.composeValue(parentValueData);
-
-                if (parentValueData) {
-                    parentData = that.copyBoundedData(suggestion.data, that.bounds.all);
-                    if (suggestion.data.kladr_id) {
-                        parentData.kladr_id = that.getBoundedKladrId(suggestion.data.kladr_id, that.bounds.all);
-                    }
-                    that.setSuggestion({
-                        value: parentValueData,
-                        data: parentData
-                    });
-                }
+                that.setSuggestion(suggestion);
             }
 
         };
@@ -3014,8 +3057,7 @@
             'settlement': { digits: 11, zeros: 2 },
             'street': { digits: 15, zeros: 2 },
             'house': {digits: 19 }
-        },
-        KLADR_MIN_LENGTH = 11;
+        };
 
     var methods = {
 

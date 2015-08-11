@@ -95,6 +95,13 @@
                 dataType: 'json'
             },
             addTypeInUrl: false
+        },
+        'status': {
+            defaultParams: {
+                type: 'GET',
+                dataType: 'json'
+            },
+            addTypeInUrl: true
         }
     };
 
@@ -132,10 +139,12 @@
             removeConstraint: 'suggestions-remove',
             value: 'suggestions-value'
         };
+        that.disabled = false;
         that.selection = null;
         that.$viewport = $(window);
         that.$body = $(document.body);
         that.type = null;
+        that.status = {};
 
         // Initialize and set options:
         that.initialize();
@@ -378,6 +387,10 @@
             this.disabled = false;
         },
 
+        isUnavailable: function () {
+            return this.disabled;
+        },
+
         update: function () {
             var that = this,
                 query = that.el.val();
@@ -392,9 +405,21 @@
 
         setSuggestion: function (suggestion) {
             var that = this,
+                data,
                 value;
 
-            if ($.isPlainObject(suggestion)) {
+            if ($.isPlainObject(suggestion) && $.isPlainObject(suggestion.data)) {
+                suggestion = $.extend(true, {}, suggestion);
+
+                if (that.bounds.own.length) {
+                    that.checkValueBounds(suggestion);
+                    data = that.copyBoundedData(suggestion.data, that.bounds.all);
+                    if (suggestion.data.kladr_id) {
+                        data.kladr_id = that.getBoundedKladrId(suggestion.data.kladr_id, that.bounds.all);
+                    }
+                    suggestion.data = data;
+                }
+
                 value = that.getSuggestionValue(suggestion) || '';
                 that.currentValue = value;
                 that.el.val(value);
@@ -735,7 +760,7 @@
 
 //include "element.js"
 
-//include "authorization.js"
+//include "status.js"
 
 //include "geolocation.js"
 
