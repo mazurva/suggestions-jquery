@@ -33,6 +33,7 @@
             onSearchStart: $.noop,
             onSearchComplete: $.noop,
             onSearchError: $.noop,
+            onSuggestionsFetch: null,
             onSelect: null,
             onSelectNothing: null,
             onInvalidateSelection: null,
@@ -52,11 +53,13 @@
             preventBadQueries: false,
             hint: 'Выберите вариант или продолжите ввод',
             type: null,
+            requestMode: 'suggest',
             count: 5,
             $helpers: null,
             headers: null,
             scrollOnFocus: true,
-            mobileWidth: 980
+            mobileWidth: 980,
+            initializeInterval: 100
         };
 
     var notificator = {
@@ -102,6 +105,29 @@
                 dataType: 'json'
             },
             addTypeInUrl: true
+        },
+        'findById': {
+            defaultParams: {
+                type: utils.getDefaultType(),
+                dataType: 'json',
+                contentType: utils.getDefaultContentType()
+            },
+            addTypeInUrl: true
+        }
+    };
+
+    var requestModes = {
+        'suggest': {
+            method: 'suggest',
+            userSelect: true,
+            updateValue: true,
+            enrichmentEnabled: true
+        },
+        'findById': {
+            method: 'findById',
+            userSelect: false,
+            updateValue: false,
+            enrichmentEnabled: false
         }
     };
 
@@ -147,11 +173,16 @@
         that.status = {};
 
         that.setupElement();
+
+        that.initializer = $.Deferred();
+
         if (that.el.is(':visible')) {
-            that.initialize();
+            that.initializer.resolve();
         } else {
             that.deferInitialization();
         }
+
+        that.initializer.done($.proxy(that.initialize, that));
     }
 
     Suggestions.utils = utils;
@@ -186,18 +217,34 @@
         deferInitialization: function () {
             var that = this,
                 events = 'mouseover focus keydown',
+                timer,
                 callback = function () {
-                    that.el.off(events, callback);
+                    that.initializer.resolve();
                     that.enable();
-                    that.initialize();
                 };
+
+            that.initializer.always(function(){
+                that.el.off(events, callback);
+                clearInterval(timer);
+            });
 
             that.disabled = true;
             that.el.on(events, callback);
+            timer = setInterval(function(){
+                if (that.el.is(':visible')) {
+                    callback();
+                }
+            }, that.options.initializeInterval);
+        },
+
+        isInitialized: function () {
+            return this.initializer.state() === 'resolved';
         },
 
         dispose: function () {
             var that = this;
+
+            that.initializer.reject();
             that.notify('dispose');
             that.el.removeData(dataAttrKey)
                 .removeClass('suggestions-input');
@@ -313,19 +360,27 @@
 
             $.extend(that.options, suppliedOptions);
 
-            that.type = types[that.options.type];
-            if (!that.type) {
-                that.disable();
-                throw '`type` option is incorrect! Must be one of: ' + $.map(types, function (i, type) {
-                    return '"' + type + '"';
-                }).join(', ');
-            }
+            // Check mandatory options
+            $.each({
+                'type': types,
+                'requestMode': requestModes
+            }, function (option, available) {
+                that[option] = available[that.options[option]];
+                if (!that[option]) {
+                    that.disable();
+                    throw '`' + option + '` option is incorrect! Must be one of: ' + $.map(available, function (value, name) {
+                        return '"' + name + '"';
+                    }).join(', ');
+                }
+            });
 
             $(that.options.$helpers)
                 .off(eventNS)
                 .on('mousedown' + eventNS, $.proxy(that.onMousedown, that));
 
-            that.notify('setOptions');
+            if (that.isInitialized()) {
+                that.notify('setOptions');
+            }
         },
 
         // Common public methods
@@ -336,10 +391,10 @@
                 wrapperOffset,
                 origin;
 
-            if (e && e.type == 'scroll' && !that.options.floating) return;
-            that.$container.appendTo(that.options.floating ? that.$body : that.$wrapper);
-
             that.isMobile = that.$viewport.width() <= that.options.mobileWidth;
+
+            if (!that.isInitialized() || (e && e.type == 'scroll' && !(that.options.floating || that.isMobile))) return;
+            that.$container.appendTo(that.options.floating ? that.$body : that.$wrapper);
 
             that.notify('resetPosition');
             // reset input's padding to default, determined by css
@@ -382,14 +437,16 @@
         clear: function () {
             var that = this;
 
-            that.clearCache();
-            that.currentValue = '';
-            that.selection = null;
-            that.hide();
-            that.suggestions = [];
-            that.el.val('');
-            that.el.trigger('suggestions-clear');
-            that.notify('clear');
+            if (that.isInitialized()) {
+                that.clearCache();
+                that.currentValue = '';
+                that.selection = null;
+                that.hide();
+                that.suggestions = [];
+                that.el.val('');
+                that.el.trigger('suggestions-clear');
+                that.notify('clear');
+            }
         },
 
         disable: function () {
@@ -397,7 +454,9 @@
 
             that.disabled = true;
             that.abortRequest();
-            that.hide();
+            if (that.visible) {
+                that.hide();
+            }
         },
 
         enable: function () {
@@ -412,11 +471,13 @@
             var that = this,
                 query = that.el.val();
 
-            if (that.isQueryRequestable(query)) {
+            if (that.isInitialized()) {
                 that.currentValue = query;
-                that.updateSuggestions(query);
-            } else {
-                that.hide();
+                if (that.isQueryRequestable(query)) {
+                    that.updateSuggestions(query);
+                } else {
+                    that.hide();
+                }
             }
         },
 
@@ -443,6 +504,7 @@
                 that.selection = suggestion;
                 that.suggestions = [suggestion];
                 that.abortRequest();
+                that.el.trigger('suggestions-set');
             }
         },
 
@@ -459,11 +521,13 @@
             resolver
                 .done(function (suggestion) {
                     that.selectSuggestion(suggestion, 0, currentValue, { hasBeenEnriched: true });
+                    that.el.trigger('suggestions-fixdata', suggestion);
                 })
                 .fail(function () {
                     that.selection = null;
                     that.currentValue = '';
                     that.el.val(that.currentValue);
+                    that.el.trigger('suggestions-fixdata');
                 });
 
             if (that.isQueryRequestable(fullQuery)) {
@@ -505,6 +569,7 @@
         getAjaxParams: function (method, custom) {
             var that = this,
                 token = $.trim(that.options.token),
+                partner = $.trim(that.options.partner),
                 serviceUrl = that.options.serviceUrl,
                 serviceMethod = serviceMethods[method],
                 params = $.extend({
@@ -527,6 +592,9 @@
                 if (token) {
                     headers['Authorization'] = 'Token ' + token;
                 }
+                if (partner) {
+                    headers['X-Partner'] = partner;
+                }
                 headers['X-Version'] = Suggestions.version;
                 if (!params.headers) {
                     params.headers = {};
@@ -536,6 +604,9 @@
                 // for XDomainRequest put token into URL
                 if (token) {
                     headers['token'] = token;
+                }
+                if (partner) {
+                    headers['partner'] = partner;
                 }
                 headers['version'] = Suggestions.version;
                 serviceUrl = utils.addUrlParams(serviceUrl, headers);
@@ -594,8 +665,8 @@
          * @param {String} query
          * @param {Object} customParams parameters specified here will be passed to request body
          * @param {Object} requestOptions
-         *          - noCallbacks flag, request competence callbacks will not be invoked
-         *          - useEnrichmentCache flag
+         * @param {Boolean} [requestOptions.noCallbacks]  flag, request competence callbacks will not be invoked
+         * @param {Boolean} [requestOptions.useEnrichmentCache]
          * @return {$.Deferred} waiter which is to be resolved with suggestions as argument
          */
         getSuggestions: function (query, customParams, requestOptions) {
@@ -663,7 +734,7 @@
         doGetSuggestions: function (params) {
             var that = this,
                 request = $.ajax(
-                    that.getAjaxParams('suggest', { data: utils.serialize(params) })
+                    that.getAjaxParams(that.requestMode.method, { data: utils.serialize(params) })
                 );
 
             that.abortRequest();
@@ -703,7 +774,8 @@
          * @return {Boolean} response contains acceptable data
          */
         processResponse: function (response) {
-            var that = this;
+            var that = this,
+                suggestions;
 
             if (!response || !$.isArray(response.suggestions)) {
                 return false;
@@ -711,6 +783,13 @@
 
             that.verifySuggestionsFormat(response.suggestions);
             that.setUnrestrictedValues(response.suggestions);
+
+            if ($.isFunction(that.options.onSuggestionsFetch)) {
+                suggestions = that.options.onSuggestionsFetch.call(that.element, response.suggestions);
+                if ($.isArray(suggestions)) {
+                    response.suggestions = suggestions;
+                }
+            }
 
             return true;
         },
@@ -763,7 +842,9 @@
                 label = that.getFirstConstraintLabel();
 
             $.each(suggestions, function (i, suggestion) {
-                suggestion.unrestricted_value = shouldRestrict ? label + ', ' + suggestion.value : suggestion.value;
+                if (!suggestion.unrestricted_value) {
+                    suggestion.unrestricted_value = shouldRestrict ? label + ', ' + suggestion.value : suggestion.value;
+                }
             });
         },
 

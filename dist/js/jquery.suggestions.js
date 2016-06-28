@@ -1,5 +1,5 @@
 /**
- * DaData.ru Suggestions jQuery plugin, version 15.8.1
+ * DaData.ru Suggestions jQuery plugin, version 16.5.4
  *
  * DaData.ru Suggestions jQuery plugin is freely distributable under the terms of MIT-style license
  * Built on DevBridge Autocomplete for jQuery (https://github.com/devbridge/jQuery-Autocomplete)
@@ -40,6 +40,7 @@
             onSearchStart: $.noop,
             onSearchComplete: $.noop,
             onSearchError: $.noop,
+            onSuggestionsFetch: null,
             onSelect: null,
             onSelectNothing: null,
             onInvalidateSelection: null,
@@ -59,11 +60,13 @@
             preventBadQueries: false,
             hint: 'Выберите вариант или продолжите ввод',
             type: null,
+            requestMode: 'suggest',
             count: 5,
             $helpers: null,
             headers: null,
             scrollOnFocus: true,
-            mobileWidth: 980
+            mobileWidth: 980,
+            initializeInterval: 100
         };
 
     var notificator = {
@@ -98,8 +101,8 @@
                 };
 
                 if (str) {
-                    $.each(map, function(char, html){
-                        str = str.replace(new RegExp(char, 'g'), html);
+                    $.each(map, function(ch, html){
+                        str = str.replace(new RegExp(ch, 'g'), html);
                     });
                 }
                 return str;
@@ -118,7 +121,9 @@
             },
             serialize: function (data) {
                 if ($.support.cors) {
-                    return JSON.stringify(data);
+                    return JSON.stringify(data, function (key, value) {
+                        return value === null ? undefined : value;
+                    });
                 } else {
                     return $.param(data, true);
                 }
@@ -247,56 +252,20 @@
          * @returns {Function} same parent checker function
          */
         function sameParentChecker (preprocessFn) {
-           return function (suggestions) {
-               if (suggestions.length === 0) {
-                   return false;
-               }
-               if (suggestions.length === 1) {
-                   return true;
-               }
-
-               var parentValue = preprocessFn(suggestions[0].value),
-                   aliens = $.grep(suggestions, function (suggestion) {
-                       return preprocessFn(suggestion.value).indexOf(parentValue) === 0;
-                   }, true);
-
-               return aliens.length === 0;
-           }
-        }
-
-        /**
-         * Factory to create match by words function
-         * @param haveSameParentFn called to check if all suggestions have the same parent
-         * @returns {Function} match by words function
-         */
-        function byWordsMatcher(haveSameParentFn) {
-            return function (query, suggestions) {
-                var stopwords = this && this.stopwords,
-                    queryLowerCase = query.toLowerCase(),
-                    queryTokens,
-                    index = -1;
-
-                if (haveSameParentFn(suggestions)) {
-                    queryTokens = utils.withSubTokens(utils.getWords(queryLowerCase, stopwords));
-
-                    $.each(suggestions, function(i, suggestion) {
-                        var suggestedValue = suggestion.value.toLowerCase();
-
-                        if (utils.stringEncloses(queryLowerCase, suggestedValue)) {
-                            return false;
-                        }
-
-                        // check if query words are a subset of suggested words
-                        var suggestionWords = utils.withSubTokens(utils.getWords(suggestedValue, stopwords));
-
-                        if (utils.arrayMinus(queryTokens, suggestionWords).length === 0) {
-                            index = i;
-                            return false;
-                        }
-                    });
+            return function (suggestions) {
+                if (suggestions.length === 0) {
+                    return false;
+                }
+                if (suggestions.length === 1) {
+                    return true;
                 }
 
-                return index;
+                var parentValue = preprocessFn(suggestions[0].value),
+                    aliens = $.grep(suggestions, function (suggestion) {
+                        return preprocessFn(suggestion.value).indexOf(parentValue) === 0;
+                    }, true);
+
+                return aliens.length === 0;
             }
         }
 
@@ -342,15 +311,69 @@
                     }
                 });
 
-                return matches.length == 1 ? matches[0] : -1;
+                return matches.length === 1 ? matches[0] : -1;
             },
 
             /**
              * Matches query against suggestions word-by-word (with respect to stopwords).
              * Matches if query words are a subset of suggested words.
              */
-            matchByWords: byWordsMatcher(haveSameParent),
-            matchByWordsAddress: byWordsMatcher(haveSameParentAddress),
+            matchByWords: function (query, suggestions) {
+                var stopwords = this && this.stopwords,
+                    queryLowerCase = query.toLowerCase(),
+                    queryTokens,
+                    matches = [];
+
+                if (haveSameParent(suggestions)) {
+                    queryTokens = utils.withSubTokens(utils.getWords(queryLowerCase, stopwords));
+
+                    $.each(suggestions, function(i, suggestion) {
+                        var suggestedValue = suggestion.value.toLowerCase();
+
+                        if (utils.stringEncloses(queryLowerCase, suggestedValue)) {
+                            return false;
+                        }
+
+                        // check if query words are a subset of suggested words
+                        var suggestionWords = utils.withSubTokens(utils.getWords(suggestedValue, stopwords));
+
+                        if (utils.arrayMinus(queryTokens, suggestionWords).length === 0) {
+                            matches.push(i);
+                        }
+                    });
+                }
+
+                return matches.length === 1 ? matches[0] : -1;
+            },
+
+            matchByWordsAddress: function (query, suggestions) {
+                var stopwords = this && this.stopwords,
+                    queryLowerCase = query.toLowerCase(),
+                    queryTokens,
+                    index = -1;
+
+                if (haveSameParentAddress(suggestions)) {
+                    queryTokens = utils.withSubTokens(utils.getWords(queryLowerCase, stopwords));
+
+                    $.each(suggestions, function(i, suggestion) {
+                        var suggestedValue = suggestion.value.toLowerCase();
+
+                        if (utils.stringEncloses(queryLowerCase, suggestedValue)) {
+                            return false;
+                        }
+
+                        // check if query words are a subset of suggested words
+                        var suggestionWords = utils.withSubTokens(utils.getWords(suggestedValue, stopwords));
+
+                        if (utils.arrayMinus(queryTokens, suggestionWords).length === 0) {
+                            index = i;
+                            return false;
+                        }
+                    });
+                }
+
+                return index;
+            },
 
             matchByFields: function (query, suggestions) {
                 var stopwords = this && this.stopwords,
@@ -546,7 +569,7 @@
                 value = that.wrapFormattedValue(value, suggestion);
 
                 if (address) {
-                    address = address.replace(/^\d{6}( РОССИЯ)?, /i, '');
+                    address = address.replace(/^(\d{6}?\s+|Россия,\s+)/i, '');
                     if (that.isMobile) {
                         // keep only two first words
                         address = address.replace(new RegExp('^([^' + wordDelimiters + ']+[' + wordDelimiters + ']+[^' + wordDelimiters + ']+).*'), '$1');
@@ -580,11 +603,11 @@
                         formattedInn = formattedInn.split('');
                         innParts = $.map(innPartsLength, function (partLength) {
                             var formattedPart = '',
-                                char;
+                                ch;
 
-                            while (partLength && (char = formattedInn.shift())) {
-                                formattedPart += char;
-                                if (rDigit.test(char)) partLength--;
+                            while (partLength && (ch = formattedInn.shift())) {
+                                formattedPart += ch;
+                                if (rDigit.test(ch)) partLength--;
                             }
 
                             return formattedPart;
@@ -672,6 +695,29 @@
                 dataType: 'json'
             },
             addTypeInUrl: true
+        },
+        'findById': {
+            defaultParams: {
+                type: utils.getDefaultType(),
+                dataType: 'json',
+                contentType: utils.getDefaultContentType()
+            },
+            addTypeInUrl: true
+        }
+    };
+
+    var requestModes = {
+        'suggest': {
+            method: 'suggest',
+            userSelect: true,
+            updateValue: true,
+            enrichmentEnabled: true
+        },
+        'findById': {
+            method: 'findById',
+            userSelect: false,
+            updateValue: false,
+            enrichmentEnabled: false
         }
     };
 
@@ -717,18 +763,23 @@
         that.status = {};
 
         that.setupElement();
+
+        that.initializer = $.Deferred();
+
         if (that.el.is(':visible')) {
-            that.initialize();
+            that.initializer.resolve();
         } else {
             that.deferInitialization();
         }
+
+        that.initializer.done($.proxy(that.initialize, that));
     }
 
     Suggestions.utils = utils;
 
     Suggestions.defaultOptions = defaultOptions;
 
-    Suggestions.version = '15.8.1';
+    Suggestions.version = '16.5.4';
 
     $.Suggestions = Suggestions;
 
@@ -756,18 +807,34 @@
         deferInitialization: function () {
             var that = this,
                 events = 'mouseover focus keydown',
+                timer,
                 callback = function () {
-                    that.el.off(events, callback);
+                    that.initializer.resolve();
                     that.enable();
-                    that.initialize();
                 };
+
+            that.initializer.always(function(){
+                that.el.off(events, callback);
+                clearInterval(timer);
+            });
 
             that.disabled = true;
             that.el.on(events, callback);
+            timer = setInterval(function(){
+                if (that.el.is(':visible')) {
+                    callback();
+                }
+            }, that.options.initializeInterval);
+        },
+
+        isInitialized: function () {
+            return this.initializer.state() === 'resolved';
         },
 
         dispose: function () {
             var that = this;
+
+            that.initializer.reject();
             that.notify('dispose');
             that.el.removeData(dataAttrKey)
                 .removeClass('suggestions-input');
@@ -883,19 +950,27 @@
 
             $.extend(that.options, suppliedOptions);
 
-            that.type = types[that.options.type];
-            if (!that.type) {
-                that.disable();
-                throw '`type` option is incorrect! Must be one of: ' + $.map(types, function (i, type) {
-                    return '"' + type + '"';
-                }).join(', ');
-            }
+            // Check mandatory options
+            $.each({
+                'type': types,
+                'requestMode': requestModes
+            }, function (option, available) {
+                that[option] = available[that.options[option]];
+                if (!that[option]) {
+                    that.disable();
+                    throw '`' + option + '` option is incorrect! Must be one of: ' + $.map(available, function (value, name) {
+                        return '"' + name + '"';
+                    }).join(', ');
+                }
+            });
 
             $(that.options.$helpers)
                 .off(eventNS)
                 .on('mousedown' + eventNS, $.proxy(that.onMousedown, that));
 
-            that.notify('setOptions');
+            if (that.isInitialized()) {
+                that.notify('setOptions');
+            }
         },
 
         // Common public methods
@@ -906,10 +981,10 @@
                 wrapperOffset,
                 origin;
 
-            if (e && e.type == 'scroll' && !that.options.floating) return;
-            that.$container.appendTo(that.options.floating ? that.$body : that.$wrapper);
-
             that.isMobile = that.$viewport.width() <= that.options.mobileWidth;
+
+            if (!that.isInitialized() || (e && e.type == 'scroll' && !(that.options.floating || that.isMobile))) return;
+            that.$container.appendTo(that.options.floating ? that.$body : that.$wrapper);
 
             that.notify('resetPosition');
             // reset input's padding to default, determined by css
@@ -952,14 +1027,16 @@
         clear: function () {
             var that = this;
 
-            that.clearCache();
-            that.currentValue = '';
-            that.selection = null;
-            that.hide();
-            that.suggestions = [];
-            that.el.val('');
-            that.el.trigger('suggestions-clear');
-            that.notify('clear');
+            if (that.isInitialized()) {
+                that.clearCache();
+                that.currentValue = '';
+                that.selection = null;
+                that.hide();
+                that.suggestions = [];
+                that.el.val('');
+                that.el.trigger('suggestions-clear');
+                that.notify('clear');
+            }
         },
 
         disable: function () {
@@ -967,7 +1044,9 @@
 
             that.disabled = true;
             that.abortRequest();
-            that.hide();
+            if (that.visible) {
+                that.hide();
+            }
         },
 
         enable: function () {
@@ -982,11 +1061,13 @@
             var that = this,
                 query = that.el.val();
 
-            if (that.isQueryRequestable(query)) {
+            if (that.isInitialized()) {
                 that.currentValue = query;
-                that.updateSuggestions(query);
-            } else {
-                that.hide();
+                if (that.isQueryRequestable(query)) {
+                    that.updateSuggestions(query);
+                } else {
+                    that.hide();
+                }
             }
         },
 
@@ -1013,6 +1094,7 @@
                 that.selection = suggestion;
                 that.suggestions = [suggestion];
                 that.abortRequest();
+                that.el.trigger('suggestions-set');
             }
         },
 
@@ -1029,11 +1111,13 @@
             resolver
                 .done(function (suggestion) {
                     that.selectSuggestion(suggestion, 0, currentValue, { hasBeenEnriched: true });
+                    that.el.trigger('suggestions-fixdata', suggestion);
                 })
                 .fail(function () {
                     that.selection = null;
                     that.currentValue = '';
                     that.el.val(that.currentValue);
+                    that.el.trigger('suggestions-fixdata');
                 });
 
             if (that.isQueryRequestable(fullQuery)) {
@@ -1075,6 +1159,7 @@
         getAjaxParams: function (method, custom) {
             var that = this,
                 token = $.trim(that.options.token),
+                partner = $.trim(that.options.partner),
                 serviceUrl = that.options.serviceUrl,
                 serviceMethod = serviceMethods[method],
                 params = $.extend({
@@ -1097,6 +1182,9 @@
                 if (token) {
                     headers['Authorization'] = 'Token ' + token;
                 }
+                if (partner) {
+                    headers['X-Partner'] = partner;
+                }
                 headers['X-Version'] = Suggestions.version;
                 if (!params.headers) {
                     params.headers = {};
@@ -1106,6 +1194,9 @@
                 // for XDomainRequest put token into URL
                 if (token) {
                     headers['token'] = token;
+                }
+                if (partner) {
+                    headers['partner'] = partner;
                 }
                 headers['version'] = Suggestions.version;
                 serviceUrl = utils.addUrlParams(serviceUrl, headers);
@@ -1164,8 +1255,8 @@
          * @param {String} query
          * @param {Object} customParams parameters specified here will be passed to request body
          * @param {Object} requestOptions
-         *          - noCallbacks flag, request competence callbacks will not be invoked
-         *          - useEnrichmentCache flag
+         * @param {Boolean} [requestOptions.noCallbacks]  flag, request competence callbacks will not be invoked
+         * @param {Boolean} [requestOptions.useEnrichmentCache]
          * @return {$.Deferred} waiter which is to be resolved with suggestions as argument
          */
         getSuggestions: function (query, customParams, requestOptions) {
@@ -1233,7 +1324,7 @@
         doGetSuggestions: function (params) {
             var that = this,
                 request = $.ajax(
-                    that.getAjaxParams('suggest', { data: utils.serialize(params) })
+                    that.getAjaxParams(that.requestMode.method, { data: utils.serialize(params) })
                 );
 
             that.abortRequest();
@@ -1273,7 +1364,8 @@
          * @return {Boolean} response contains acceptable data
          */
         processResponse: function (response) {
-            var that = this;
+            var that = this,
+                suggestions;
 
             if (!response || !$.isArray(response.suggestions)) {
                 return false;
@@ -1281,6 +1373,13 @@
 
             that.verifySuggestionsFormat(response.suggestions);
             that.setUnrestrictedValues(response.suggestions);
+
+            if ($.isFunction(that.options.onSuggestionsFetch)) {
+                suggestions = that.options.onSuggestionsFetch.call(that.element, response.suggestions);
+                if ($.isArray(suggestions)) {
+                    response.suggestions = suggestions;
+                }
+            }
 
             return true;
         },
@@ -1333,7 +1432,9 @@
                 label = that.getFirstConstraintLabel();
 
             $.each(suggestions, function (i, suggestion) {
-                suggestion.unrestricted_value = shouldRestrict ? label + ', ' + suggestion.value : suggestion.value;
+                if (!suggestion.unrestricted_value) {
+                    suggestion.unrestricted_value = shouldRestrict ? label + ', ' + suggestion.value : suggestion.value;
+                }
             });
         },
 
@@ -1726,7 +1827,7 @@
                     params = {};
 
                 if (that.geoLocation && $.isFunction(that.geoLocation.promise) && that.geoLocation.state() == 'resolved') {
-                    that.geoLocation.done(function(locationData){
+                    that.geoLocation.done(function (locationData) {
                         params['locations_boost'] = $.makeArray(locationData);
                     });
                 }
@@ -1760,10 +1861,10 @@
 
             enrichSuggestion: function (suggestion, selectionOptions) {
                 var that = this,
-                    token = $.trim(that.options.token),
                     resolver = $.Deferred();
 
-                if (!that.status.enrich || !that.type.enrichmentEnabled || !token || selectionOptions && selectionOptions.dontEnrich) {
+                if (!that.status.enrich || !that.type.enrichmentEnabled || !that.requestMode.enrichmentEnabled ||
+                    selectionOptions && selectionOptions.dontEnrich) {
                     return resolver.resolve(suggestion);
                 }
 
@@ -1775,10 +1876,23 @@
                 that.disableDropdown();
 
                 // Set `currentValue` to make `processResponse` to consider enrichment response valid
-                that.currentValue = suggestion.value;
+                that.currentValue = suggestion.unrestricted_value ;
 
                 // prevent request abortion during onBlur
-                that.enrichPhase = that.getSuggestions(suggestion.value, { count: 1 }, { noCallbacks: true, useEnrichmentCache: true })
+                that.enrichPhase = that.getSuggestions(
+                    suggestion.unrestricted_value,
+                    {
+                        count: 1,
+                        locations: null,
+                        locations_boost: null,
+                        from_bound: null,
+                        to_bound: null
+                    },
+                    {
+                        noCallbacks: true,
+                        useEnrichmentCache: true
+                    }
+                )
                     .always(function () {
                         that.enableDropdown();
                     })
@@ -1790,6 +1904,7 @@
                     .fail(function () {
                         resolver.resolve(suggestion);
                     });
+
                 return resolver;
             },
 
@@ -1909,29 +2024,35 @@
                     index;
 
                 if (!that.dropdownDisabled) {
+                    that.cancelFocus = true;
+                    that.el.focus();
+
                     while ($el.length && !(index = $el.attr('data-index'))) {
                         $el = $el.closest('.' + that.classes.suggestion);
                     }
+
                     if (index && !isNaN(index)) {
                         that.select(+index);
                     }
                 }
-                that.cancelFocus = true;
-                that.el.focus();
             },
 
             // Dropdown UI methods
 
             setDropdownPosition: function (origin, elLayout) {
                 var that = this,
+                    scrollLeft = that.$viewport.scrollLeft(),
                     style;
 
                 if (that.isMobile) {
-                    style = {
-                        left: origin.left - elLayout.left + 'px',
-                        top: origin.top + elLayout.outerHeight + 'px',
-                        width: that.$viewport.width() + 'px'
+                    style = that.options.floating ? {
+                        left: scrollLeft + 'px',
+                        top: elLayout.top + elLayout.outerHeight + 'px'
+                    } : {
+                        left: origin.left - elLayout.left + scrollLeft + 'px',
+                        top: origin.top + elLayout.outerHeight + 'px'
                     };
+                    style.width = that.$viewport.width() + 'px';
                 } else {
                     style = that.options.floating ? {
                         left: elLayout.left + 'px',
@@ -1956,7 +2077,7 @@
                     .toggleClass(that.classes.mobile, that.isMobile)
                     .css(style);
 
-                that.containerItemsPadding = elLayout.left + elLayout.borderLeft + elLayout.paddingLeft;
+                that.containerItemsPadding = elLayout.left + elLayout.borderLeft + elLayout.paddingLeft - scrollLeft;
             },
 
             setItemsPositions: function () {
@@ -1989,24 +2110,29 @@
              */
             hasSuggestionsToChoose: function () {
                 var that = this;
+
                 return that.suggestions.length > 1 ||
                     (that.suggestions.length === 1 &&
-                        (!that.selection || $.trim(that.suggestions[0].value) != $.trim(that.selection.value))
+                        (!that.selection || $.trim(that.suggestions[0].value) !== $.trim(that.selection.value))
                     );
             },
 
             suggest: function () {
-                if (!this.hasSuggestionsToChoose()) {
-                    this.hide();
+                var that = this,
+                    options = that.options,
+                    formatResult, html;
+
+                if (!that.requestMode.userSelect) {
+                    return ;
+                }
+
+                if (!that.hasSuggestionsToChoose()) {
+                    that.hide();
                     return;
                 }
 
-                var that = this,
-                    options = that.options,
-                    formatResult = options.formatResult || that.type.formatResult || that.formatResult,
-                    beforeRender = options.beforeRender,
-                    html = [],
-                    index;
+                formatResult = options.formatResult || that.type.formatResult || that.formatResult;
+                html = [];
 
                 // Build hint html
                 if (!that.isMobile && options.hint && that.suggestions.length) {
@@ -2041,8 +2167,8 @@
                     that.getSuggestionsItems().eq(that.selectedIndex).addClass(that.classes.selected);
                 }
 
-                if ($.isFunction(beforeRender)) {
-                    beforeRender.call(that.element, that.$container);
+                if ($.isFunction(options.beforeRender)) {
+                    options.beforeRender.call(that.element, that.$container);
                 }
 
                 that.$container.show();
@@ -2589,7 +2715,7 @@
             restrict_value: false
         };
 
-        var LOCATION_FIELDS = ['kladr_id', 'postal_code', 'region', 'area', 'city', 'settlement', 'street'];
+        var LOCATION_FIELDS = ['kladr_id', 'postal_code', 'country', 'region', 'area', 'city', 'settlement', 'street'];
 
         function filteredLocation (data) {
             var location = {};
@@ -2780,12 +2906,14 @@
                         params.restrict_value = true;
                     }
                 } else {
-                    $.each(constraints, function (id, constraint) {
-                        locations = locations.concat(constraint.locations);
-                    });
-                    if (locations.length) {
-                        params.locations = locations;
-                        params.restrict_value = that.options.restrict_value;
+                    if (constraints) {
+                        $.each(constraints, function (id, constraint) {
+                            locations = locations.concat(constraint.locations);
+                        });
+                        if (locations.length) {
+                            params.locations = locations;
+                            params.restrict_value = that.options.restrict_value;
+                        }
                     }
                 }
 
@@ -2929,6 +3057,17 @@
             },
 
             /**
+             * Selects first when user interaction is not supposed
+             */
+            selectFoundSuggestion: function () {
+                var that = this;
+
+                if (!that.requestMode.userSelect) {
+                    that.select(0);
+                }
+            },
+
+            /**
              * Selects current or first matched suggestion
              * @returns {number} index of found suggestion
              */
@@ -3011,24 +3150,29 @@
                     continueSelecting = false;
                 }
 
-                if (selectionOptions.hasBeenEnriched) {
-                    that.suggestions[index] = suggestion;
+                // `suggestions` cat be empty, e.g. during `fixData`
+                if (selectionOptions.hasBeenEnriched && that.suggestions[index]) {
+                    that.suggestions[index].data = suggestion.data;
                 }
 
-                that.checkValueBounds(suggestion);
-                that.currentValue = that.getSuggestionValue(suggestion);
+                if (that.requestMode.updateValue) {
+                    that.checkValueBounds(suggestion);
+                    that.currentValue = that.getSuggestionValue(suggestion);
 
-                if (that.currentValue && !selectionOptions.noSpace && !assumeDataComplete) {
-                    that.currentValue += ' ';
+                    if (that.currentValue && !selectionOptions.noSpace && !assumeDataComplete) {
+                        that.currentValue += ' ';
+                    }
+                    that.el.val(that.currentValue);
                 }
-                that.el.val(that.currentValue);
 
                 if (that.currentValue) {
                     that.selection = suggestion;
                     if (!that.areSuggestionsSame(suggestion, currentSelection)) {
                         that.trigger('Select', suggestion, that.currentValue != lastValue);
                     }
-                    that.onSelectComplete(continueSelecting);
+                    if (that.requestMode.userSelect) {
+                        that.onSelectComplete(continueSelecting);
+                    }
                 } else {
                     that.selection = null;
                     that.triggerOnSelectNothing();
@@ -3072,6 +3216,9 @@
         };
 
         $.extend(Suggestions.prototype, methods);
+
+        notificator
+            .on('assignSuggestions', methods.selectFoundSuggestion);
 
     }());
 

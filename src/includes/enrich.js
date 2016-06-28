@@ -4,10 +4,10 @@
 
             enrichSuggestion: function (suggestion, selectionOptions) {
                 var that = this,
-                    token = $.trim(that.options.token),
                     resolver = $.Deferred();
 
-                if (!that.status.enrich || !that.type.enrichmentEnabled || !token || selectionOptions && selectionOptions.dontEnrich) {
+                if (!that.status.enrich || !that.type.enrichmentEnabled || !that.requestMode.enrichmentEnabled ||
+                    selectionOptions && selectionOptions.dontEnrich) {
                     return resolver.resolve(suggestion);
                 }
 
@@ -19,10 +19,23 @@
                 that.disableDropdown();
 
                 // Set `currentValue` to make `processResponse` to consider enrichment response valid
-                that.currentValue = suggestion.value;
+                that.currentValue = suggestion.unrestricted_value ;
 
                 // prevent request abortion during onBlur
-                that.enrichPhase = that.getSuggestions(suggestion.value, { count: 1 }, { noCallbacks: true, useEnrichmentCache: true })
+                that.enrichPhase = that.getSuggestions(
+                    suggestion.unrestricted_value,
+                    {
+                        count: 1,
+                        locations: null,
+                        locations_boost: null,
+                        from_bound: null,
+                        to_bound: null
+                    },
+                    {
+                        noCallbacks: true,
+                        useEnrichmentCache: true
+                    }
+                )
                     .always(function () {
                         that.enableDropdown();
                     })
@@ -34,6 +47,7 @@
                     .fail(function () {
                         resolver.resolve(suggestion);
                     });
+
                 return resolver;
             },
 

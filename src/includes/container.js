@@ -89,29 +89,35 @@
                     index;
 
                 if (!that.dropdownDisabled) {
+                    that.cancelFocus = true;
+                    that.el.focus();
+
                     while ($el.length && !(index = $el.attr('data-index'))) {
                         $el = $el.closest('.' + that.classes.suggestion);
                     }
+
                     if (index && !isNaN(index)) {
                         that.select(+index);
                     }
                 }
-                that.cancelFocus = true;
-                that.el.focus();
             },
 
             // Dropdown UI methods
 
             setDropdownPosition: function (origin, elLayout) {
                 var that = this,
+                    scrollLeft = that.$viewport.scrollLeft(),
                     style;
 
                 if (that.isMobile) {
-                    style = {
-                        left: origin.left - elLayout.left + 'px',
-                        top: origin.top + elLayout.outerHeight + 'px',
-                        width: that.$viewport.width() + 'px'
+                    style = that.options.floating ? {
+                        left: scrollLeft + 'px',
+                        top: elLayout.top + elLayout.outerHeight + 'px'
+                    } : {
+                        left: origin.left - elLayout.left + scrollLeft + 'px',
+                        top: origin.top + elLayout.outerHeight + 'px'
                     };
+                    style.width = that.$viewport.width() + 'px';
                 } else {
                     style = that.options.floating ? {
                         left: elLayout.left + 'px',
@@ -136,7 +142,7 @@
                     .toggleClass(that.classes.mobile, that.isMobile)
                     .css(style);
 
-                that.containerItemsPadding = elLayout.left + elLayout.borderLeft + elLayout.paddingLeft;
+                that.containerItemsPadding = elLayout.left + elLayout.borderLeft + elLayout.paddingLeft - scrollLeft;
             },
 
             setItemsPositions: function () {
@@ -169,24 +175,29 @@
              */
             hasSuggestionsToChoose: function () {
                 var that = this;
+
                 return that.suggestions.length > 1 ||
                     (that.suggestions.length === 1 &&
-                        (!that.selection || $.trim(that.suggestions[0].value) != $.trim(that.selection.value))
+                        (!that.selection || $.trim(that.suggestions[0].value) !== $.trim(that.selection.value))
                     );
             },
 
             suggest: function () {
-                if (!this.hasSuggestionsToChoose()) {
-                    this.hide();
+                var that = this,
+                    options = that.options,
+                    formatResult, html;
+
+                if (!that.requestMode.userSelect) {
+                    return ;
+                }
+
+                if (!that.hasSuggestionsToChoose()) {
+                    that.hide();
                     return;
                 }
 
-                var that = this,
-                    options = that.options,
-                    formatResult = options.formatResult || that.type.formatResult || that.formatResult,
-                    beforeRender = options.beforeRender,
-                    html = [],
-                    index;
+                formatResult = options.formatResult || that.type.formatResult || that.formatResult;
+                html = [];
 
                 // Build hint html
                 if (!that.isMobile && options.hint && that.suggestions.length) {
@@ -221,8 +232,8 @@
                     that.getSuggestionsItems().eq(that.selectedIndex).addClass(that.classes.selected);
                 }
 
-                if ($.isFunction(beforeRender)) {
-                    beforeRender.call(that.element, that.$container);
+                if ($.isFunction(options.beforeRender)) {
+                    options.beforeRender.call(that.element, that.$container);
                 }
 
                 that.$container.show();

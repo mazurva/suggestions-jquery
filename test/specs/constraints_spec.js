@@ -114,6 +114,7 @@ describe('Address constraints', function () {
         this.instance.setOptions({
             constraints: {
                 locations: {
+                    planet: 'земля',
                     country: 'россия',
                     region: 'москва',
                     city: 'москва',
@@ -125,7 +126,7 @@ describe('Address constraints', function () {
         this.input.value = 'A';
         this.instance.onValueChange();
 
-        expect(this.server.requests[0].requestBody).toContain('"locations":[{"region":"москва","city":"москва"}]');
+        expect(this.server.requests[0].requestBody).toContain('"locations":[{"country":"россия","region":"москва","city":"москва"}]');
     });
 
     it('Should have `locations` parameter in request if constraints specified as single object named `restrictions`', function () {
@@ -393,7 +394,7 @@ describe('Address constraints', function () {
 
         beforeEach(function () {
             this.$parent = $('<input>')
-                .appendTo($('body'));
+                .appendTo($body);
 
             this.$parent.suggestions({
                 type: 'ADDRESS',
@@ -503,6 +504,26 @@ describe('Address constraints', function () {
                 region: 'Тульская',
                 area: 'Узловский'
             });
+        });
+
+        it('Should spread data to all parents', function () {
+            this.$parent.val('Тульская обл, Узловский р-н');
+            this.input.value = 'г Узловая, поселок Брусянский, ул Строителей, д 1-бара';
+
+            this.instance.setOptions({
+                bounds: 'city-',
+                constraints: this.$parent
+            });
+
+            this.instance.fixData();
+            this.server.respond(helpers.responseFor([fixtures.fullyAddress]));
+
+            expect(this.parentInstance.selection.data).toEqual(jasmine.objectContaining({
+                region: 'Тульская',
+                region_type: 'обл',
+                area: 'Узловский',
+                area_type: 'р-н'
+            }));
         });
 
     });
